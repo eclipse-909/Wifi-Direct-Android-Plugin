@@ -23,14 +23,23 @@ namespace WifiDirectPlugin {
         }
 
         ~WifiDirect() {wifiDirectManager.Call("Close");}
+        
+        /*================================ SERVER ONLY METHODS ================================*/
+        /// <summary>
+        /// Server method.
+        /// Creates a Wifi-Direct group to host clients on.
+        /// </summary>
+        public void CreateP2PGroup() {wifiDirectManager.Call("CreateGroup");}
 
         /*================================ CLIENT ONLY METHODS ================================*/
         /// <summary>
-        /// Initiates the process to discover nearby devices with Wifi-Direct.
+        /// Client method.
+        /// Initiates the process to asynchronously discover nearby devices with Wifi-Direct.
         /// Subscribe to the PeerStatusChanged event to listen for changes.
         /// </summary>
         public void DiscoverPeers() {wifiDirectManager.Call("DiscoverPeers");}
         /// <summary>
+        /// Client method.
         /// Stops an ongoing peer discovery.
         /// Subscribe to the PeerStatusChanged event to listen for changes.
         /// </summary>
@@ -42,18 +51,22 @@ namespace WifiDirectPlugin {
             );
         }
         /// <summary>
+        /// Client method.
         /// Attempts to connect to the device with the given MAC address.
         /// Can only successfully connect if the device has been discovered.
         /// Subscribe to the ConnectionAttempted event to listen for changes.
         /// </summary>
         public bool ConnectToPeer(string macAddress) {return wifiDirectManager.Call<bool>("ConnectToPeer", macAddress);}
         /// <summary>
+        /// Client method.
         /// Cancels an ongoing connection attempt.
         /// Subscribe to the ConnectionAttempted event to listen for changes.
         /// </summary>
         public void CancelConnect() {wifiDirectManager.Call("CancelConnect");}
 
         /*================================ CLIENT OR SERVER METHOD ================================*/
+        /// <summary>Removes the Wifi-Direct group if exists, and disconnects the devices.</summary>
+        public void RemoveP2PGroup() {wifiDirectManager.Call("CreateGroup");}
         /// <summary>
         /// Sends a message to the other device.
         /// This function will only work if you are connected to another device.
@@ -129,7 +142,7 @@ namespace WifiDirectPlugin {
         ATTEMPTING_PEER_DISCOVERY, FAILED_TO_DISCOVER_PEERS, STARTED_PEER_DISCOVERY, PEER_LIST_CHANGED, NO_PEERS_FOUND, STOPPED_DISCOVERY,//peer-discovery list changed
         ATTEMPTING_CONNECTION, CONNECTION_FAILED, CONNECTION_SUCCESSFUL, SOCKET_CONNECTION_SUCCESSFUL, SOCKET_CONNECTION_FAILED,//connection status changed
         DISCONNECTED, CONNECTION_LOST,//disconnection status changed
-        ERROR_UNHANDLED_ACTION, ERROR_SENDING_MESSAGE, ERROR_RECEIVING_MESSAGE, ERROR_CREATING_SERVER_SOCKET//error status
+        ERROR_CREATING_GROUP, ERROR_UNHANDLED_ACTION, ERROR_SENDING_MESSAGE, ERROR_RECEIVING_MESSAGE, ERROR_CREATING_SERVER_SOCKET//error status
     }
     /// <summary>Event args for MessageReceived event. Property: byte[] Message</summary>
     public sealed class MessageReceivedEventArgs : EventArgs {

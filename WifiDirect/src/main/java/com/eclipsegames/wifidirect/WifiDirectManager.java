@@ -68,9 +68,26 @@ public final class WifiDirectManager {
             thread.CloseThread();
             thread = null;
         }
+        RemoveGroup();
         activity.unregisterReceiver(receiver);
         receiver = null;
     }
+
+    /*========================================================================*/
+    /*================================ SERVER ================================*/
+    /*========================================================================*/
+
+    /**Creates a Wifi-Direct group to increase the chances of this device being the group owner*/
+    public void CreateGroup() {
+        p2pManager.createGroup(channel, new ActionListener() {
+            @Override public void onSuccess() {
+                //TODO I don't know if I should do something here
+            }
+            @Override public void onFailure(int i) {eventListener.OnError(Status.ERROR_CREATING_GROUP.ordinal());}
+        });
+    }
+    /**Removes the Wifi-Direct group if exists.*/
+    public void RemoveGroup() {p2pManager.removeGroup(channel, null);}
 
     /*========================================================================*/
     /*================================ CLIENT ================================*/
@@ -145,7 +162,7 @@ public final class WifiDirectManager {
         ATTEMPTING_PEER_DISCOVERY, FAILED_TO_DISCOVER_PEERS, STARTED_PEER_DISCOVERY, PEER_LIST_CHANGED, NO_PEERS_FOUND, STOPPED_DISCOVERY,//peer list changed
         ATTEMPTING_CONNECTION, CONNECTION_FAILED, CONNECTION_SUCCESSFUL, SOCKET_CONNECTION_SUCCESSFUL, SOCKET_CONNECTION_FAILED,//connection status changed
         DISCONNECTED, CONNECTION_LOST,//disconnection status changed
-        ERROR_UNHANDLED_ACTION, ERROR_SENDING_MESSAGE, ERROR_RECEIVING_MESSAGE, ERROR_CREATING_SERVER_SOCKET//error status
+        ERROR_CREATING_GROUP, ERROR_UNHANDLED_ACTION, ERROR_SENDING_MESSAGE, ERROR_RECEIVING_MESSAGE, ERROR_CREATING_SERVER_SOCKET//error status
     }
 
     /*=================================================================================*/
