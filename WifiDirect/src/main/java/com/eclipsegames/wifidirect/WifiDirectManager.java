@@ -86,8 +86,6 @@ public final class WifiDirectManager {
             @Override public void onFailure(int i) {eventListener.OnError(Status.ERROR_CREATING_GROUP.ordinal());}
         });
     }
-    /**Removes the Wifi-Direct group if exists.*/
-    public void RemoveGroup() {p2pManager.removeGroup(channel, null);}
 
     /*========================================================================*/
     /*================================ CLIENT ================================*/
@@ -141,6 +139,9 @@ public final class WifiDirectManager {
     /*==================================================================================*/
     /*================================ CLIENT OR SERVER ================================*/
     /*==================================================================================*/
+
+    /**Removes the Wifi-Direct group if exists.*/
+    public void RemoveGroup() {p2pManager.removeGroup(channel, null);}
 
     /**Cannot be called until after StartServer() or ConnectToServer() has been called and succeeded.
      * Cannot be called after StopThread().*/
