@@ -1,44 +1,43 @@
 package com.eclipsegames.wifidirect;
 
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.net.MacAddress;
 import android.net.wifi.WpsInfo;
 import android.net.wifi.p2p.WifiP2pConfig;
-import android.net.wifi.p2p.WifiP2pDevice;
-import android.net.wifi.p2p.WifiP2pDeviceList;
+import android.net.wifi.p2p.WifiP2pConfig.Builder;
 import android.net.wifi.p2p.WifiP2pInfo;
 import android.net.wifi.p2p.WifiP2pManager;
 import android.net.wifi.p2p.WifiP2pManager.ActionListener;
 import android.net.wifi.p2p.WifiP2pManager.Channel;
-import android.net.wifi.p2p.WifiP2pManager.ChannelListener;
-import android.net.wifi.p2p.WifiP2pManager.ConnectionInfoListener;
-import android.net.wifi.p2p.WifiP2pManager.PeerListListener;
+import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceInfo;
+import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceRequest;
 import android.os.Looper;
-import android.util.Pair;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class WifiDirectManager {
     private final Activity activity;
-    private WifiDirectBroadcastReceiver receiver;
     private final WifiP2pManager p2pManager;
     private final Channel channel;
-    private final List<WifiP2pDevice> discoveredPeers = new ArrayList<>();
-    private WifiDirectThread thread;
-    private static final int PORT_NUM = 8888;
     private final EventListener eventListener;
+    private WifiDirectBroadcastReceiver receiver;
+    private final Map<String, String> discoveredServices = new HashMap<>();//<MAC address, device name>
+    private WifiDirectThread thread;
+    private WifiP2pDnsSdServiceInfo serviceInfo;
+    private static final int PORT_NUM = 8888;
 
     /*============================================================================*/
     /*================================ PUBLIC API ================================*/
@@ -46,18 +45,16 @@ public final class WifiDirectManager {
 
     /**Please call the Close() method before the object is destroyed by the GC to ensure that resources are released.*/
     public WifiDirectManager(Activity a, EventListener e) {
+        eventListener = e;
         activity = a;
+        p2pManager = (WifiP2pManager) activity.getSystemService(Context.WIFI_P2P_SERVICE);
+        channel = p2pManager.initialize(activity, Looper.getMainLooper(), () -> eventListener.OnConnectionStatusChanged(Status.DISCONNECTED.ordinal()));
         receiver = new WifiDirectBroadcastReceiver();
-        p2pManager = (WifiP2pManager)activity.getSystemService(Context.WIFI_P2P_SERVICE);
         IntentFilter filter = new IntentFilter();
         filter.addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION);
-        filter.addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION);
         filter.addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION);
         filter.addAction(WifiP2pManager.WIFI_P2P_DISCOVERY_CHANGED_ACTION);
-        activity.getApplication().getApplicationContext().registerReceiver(receiver, filter);
-        assert p2pManager != null;
-        channel = p2pManager.initialize(activity, Looper.getMainLooper(), new WifiDirectListener());
-        eventListener = e;
+        activity.registerReceiver(receiver, filter);
     }
 
     /**Please call the Close() method before the object is destroyed by the GC to ensure that resources are released.*/
@@ -68,7 +65,8 @@ public final class WifiDirectManager {
             thread.CloseThread();
             thread = null;
         }
-        RemoveGroup();
+        RemoveService();
+        Disconnect();
         activity.unregisterReceiver(receiver);
         receiver = null;
     }
@@ -77,13 +75,38 @@ public final class WifiDirectManager {
     /*================================ SERVER ================================*/
     /*========================================================================*/
 
-    /**Creates a Wifi-Direct group to increase the chances of this device being the group owner*/
-    public void CreateGroup() {
-        p2pManager.createGroup(channel, new ActionListener() {
+    /**If this device hosts a server, this method will attempt to create a discoverable server that clients can search for and connect to.*/
+    @SuppressLint("MissingPermission")
+    public void CreateDiscoverableServer(String passphrase) {
+        RemoveService();
+        Disconnect();
+        WifiP2pConfig config = new Builder().setNetworkName("DIRECT-pn3-Pennies-Server").setPassphrase(passphrase).build();
+        p2pManager.createGroup(channel, config, new ActionListener() {
             @Override public void onSuccess() {
-                //TODO I don't know if I should do something here
+                Map<String, String> record = new HashMap<>();
+                record.put("SSID", config.getNetworkName());
+                serviceInfo = WifiP2pDnsSdServiceInfo.newInstance("3-Pennies-Server", "_presence._tcp", record);
+                p2pManager.addLocalService(channel, serviceInfo, new WifiP2pManager.ActionListener() {
+                    @Override public void onSuccess() {eventListener.OnDiscoveryStatusChanged(Status.SERVICE_DISCOVERABLE.ordinal());}
+                    @Override public void onFailure(int reason) {
+                        /*
+                        int ordinal = Status.ERROR_ADDING_SERVICE.ordinal();
+                        final int REASON_BIT_POSITION = 29;  // 2^29
+                        int combinedValue = (ordinal << REASON_BIT_POSITION) | (reason & 0x7);//0b0000_0111
+                        */
+                        eventListener.OnError(Status.ERROR_ADDING_SERVICE.ordinal());
+                    }
+                });
             }
-            @Override public void onFailure(int i) {eventListener.OnError(Status.ERROR_CREATING_GROUP.ordinal());}
+            @Override public void onFailure(int i) {eventListener.OnError(Status.ERROR_CREATING_GROUP.ordinal());}//TODO figure out why this errored
+        });
+    }
+
+    /**Removes the local service from discoverability. Does not disconnect clients.*/
+    public void RemoveService() {
+        p2pManager.clearLocalServices(channel, new ActionListener() {
+            @Override public void onSuccess() {eventListener.OnDiscoveryStatusChanged(Status.SERVICE_REMOVED.ordinal());}
+            @Override public void onFailure(int i) {}
         });
     }
 
@@ -91,60 +114,63 @@ public final class WifiDirectManager {
     /*================================ CLIENT ================================*/
     /*========================================================================*/
 
-    /*================================ Discover Peers ================================*/
-
-    /**Asynchronously starts discovering peers.
-     * To actually get the list of peers, call GetDiscoveredPeers().
-     * It's strongly recommended to subscribe GetDiscoveredPeers() to the peerListener.*/
-    public void DiscoverPeers() {
-        p2pManager.discoverPeers(channel, new ActionListener() {
-            @Override public void onSuccess() {eventListener.OnPeerStatusChanged(Status.ATTEMPTING_PEER_DISCOVERY.ordinal());}
-            @Override public void onFailure(int reasonCode) {eventListener.OnPeerStatusChanged(Status.FAILED_TO_DISCOVER_PEERS.ordinal());}
+    /**Asynchronous call to start discovering services. Filters by network name to only callback 3-Pennies-Server.*/
+    public void DiscoverServices() {
+        CancelDiscovery();
+        WifiP2pDnsSdServiceRequest serviceRequest = WifiP2pDnsSdServiceRequest.newInstance();
+        p2pManager.addServiceRequest(channel, serviceRequest, new ActionListener() {
+            @SuppressLint("MissingPermission")
+            @Override public void onSuccess() {
+                p2pManager.discoverServices(channel, new ActionListener() {
+                    @Override public void onSuccess() {}//handled in setDnsSdResponseListeners
+                    @Override public void onFailure(int i) {eventListener.OnError(Status.ERROR_DISCOVERING_SERVICES.ordinal());}//TODO figure out why this errored
+                });
+            }
+            @Override public void onFailure(int i) {eventListener.OnError(Status.ERROR_ADDING_SERVICE_REQUEST.ordinal());}
         });
+        p2pManager.setDnsSdResponseListeners(channel,
+            (instanceName, registrationType, srcDevice) -> {
+                if (instanceName.equals("3-Pennies-Server")) {
+                    discoveredServices.put(srcDevice.deviceAddress, srcDevice.deviceName);
+                    eventListener.OnDiscoveryStatusChanged(Status.SERVICE_LIST_CHANGED.ordinal());
+                }
+            }, null
+        );
     }
 
-    public void CancelDiscovery() {p2pManager.stopPeerDiscovery(channel, null);}
-
-    /**Gets the list of currently discovered peers.
-     * It's strongly recommended to subscribe this function to the peerListener.*/
-    public List<Pair<String, String>> GetDiscoveredPeers() {
-        List<Pair<String, String>> devices = new ArrayList<>();
-        for (WifiP2pDevice d : discoveredPeers)
-            devices.add(new Pair<>(d.deviceAddress, d.deviceName));
-        return devices;
+    /**Stops an ongoing discovery search.*/
+    public void CancelDiscovery() {
+        p2pManager.clearServiceRequests(channel, null);
+        discoveredServices.clear();
     }
 
-    /*================================ Connect to Specific Peer ================================*/
+    /**Returns the current map of devices (MAC address, device name) that are hosting a valid service.*/
+    public Map<String, String> GetDiscoveredServices() {return discoveredServices;}
 
-    /**Attempts to connect to the device with the give MAC address.
-     * Returns false if the device with the address has not been discovered.
-     * Returns true otherwise. A true return does not necessarily mean the connection was successful.
-     * Handle the results of the connection by subscribing to connectionListener.*/
-    public boolean ConnectToPeer(String macAddress) {
-        Optional<WifiP2pDevice> device = discoveredPeers.stream().filter(d -> d.deviceAddress.equals(macAddress)).findFirst();
-        if (!device.isPresent()) return false;
-        WifiP2pConfig config = new WifiP2pConfig();
-        config.deviceAddress = device.get().deviceAddress;
+    /**Attempts to connect to the device with the given MAC address and passphrase.*/
+    @SuppressLint("MissingPermission")
+    public void ConnectToService(String macAddress, String passphrase) {
+        WifiP2pConfig config = new Builder().setNetworkName("DIRECT-pn3-Pennies-Server").setDeviceAddress(MacAddress.fromString(macAddress)).setPassphrase(passphrase).build();
         config.wps.setup = WpsInfo.PBC;
         p2pManager.connect(channel, config, new ActionListener() {
-            @Override public void onSuccess() {eventListener.OnConnectionStatusChanged(Status.ATTEMPTING_CONNECTION.ordinal());}
-            @Override public void onFailure(int reason) {eventListener.OnConnectionStatusChanged(Status.CONNECTION_FAILED.ordinal());}
+            @Override public void onSuccess() {}//handled in broadcast receiver
+            @Override public void onFailure(int reason) {eventListener.OnError(Status.ERROR_CONNECTING.ordinal());}
         });
-        return true;
     }
 
-    /**Cancels an ongoing connection attempt*/
+    /**Cancels an ongoing connection attempt. Does not disconnect an existing connection.*/
     public void CancelConnect() {p2pManager.cancelConnect(channel, null);}
 
     /*==================================================================================*/
     /*================================ CLIENT OR SERVER ================================*/
     /*==================================================================================*/
 
-    /**Removes the Wifi-Direct group if exists.*/
-    public void RemoveGroup() {p2pManager.removeGroup(channel, null);}
+    /**Disconnects. If called by the server, you need to first call RemoveService().*/
+    public void Disconnect() {p2pManager.removeGroup(channel, null);}
 
-    /**Cannot be called until after StartServer() or ConnectToServer() has been called and succeeded.
-     * Cannot be called after StopThread().*/
+    /**Sends a message to the other device.
+     * Cannot be called until after a connection has successfully been established, and while they are connected.
+     * Cannot be called after StopThread(). Will throw Java Runtime exception.*/
     public void SendMessage(byte[] message) {thread.SendMessage(message);}
 
     /*================================ Event Handlers ================================*/
@@ -152,18 +178,18 @@ public final class WifiDirectManager {
     public interface EventListener {
         void OnMessageReceived(byte[] message);
         void OnStatusChanged(int status);
-        void OnPeerStatusChanged(int status);
+        void OnDiscoveryStatusChanged(int status);
         void OnConnectionStatusChanged(int status);
-        void OnDisconnected(int status);
         void OnError(int status);
     }
 
     private enum Status {
         WIFI_DIRECT_ENABLED, WIFI_DIRECT_DISABLED,//wifi direct toggled on/off
-        ATTEMPTING_PEER_DISCOVERY, FAILED_TO_DISCOVER_PEERS, STARTED_PEER_DISCOVERY, PEER_LIST_CHANGED, NO_PEERS_FOUND, STOPPED_DISCOVERY,//peer list changed
-        ATTEMPTING_CONNECTION, CONNECTION_FAILED, CONNECTION_SUCCESSFUL, SOCKET_CONNECTION_SUCCESSFUL, SOCKET_CONNECTION_FAILED,//connection status changed
-        DISCONNECTED, CONNECTION_LOST,//disconnection status changed
-        ERROR_CREATING_GROUP, ERROR_UNHANDLED_ACTION, ERROR_SENDING_MESSAGE, ERROR_RECEIVING_MESSAGE, ERROR_CREATING_SERVER_SOCKET//error status
+        SERVICE_DISCOVERABLE, SERVICE_REMOVED, STARTED_DISCOVERY, SERVICE_LIST_CHANGED, STOPPED_DISCOVERY,//service discovery
+        CONNECTION_SUCCESSFUL, DISCONNECTED, CONNECTION_LOST,//connection status
+        ERROR_CREATING_GROUP, ERROR_ADDING_SERVICE_REQUEST, ERROR_ADDING_SERVICE,//error status
+            ERROR_DISCOVERING_SERVICES, ERROR_CONNECTING, ERROR_SOCKET_CONNECTION_FAILED,
+            ERROR_UNHANDLED_ACTION, ERROR_SENDING_MESSAGE, ERROR_RECEIVING_MESSAGE, ERROR_CREATING_SERVER_SOCKET
     }
 
     /*=================================================================================*/
@@ -184,49 +210,28 @@ public final class WifiDirectManager {
                         : Status.WIFI_DIRECT_DISABLED).ordinal()
                     );
                     break;
-                case WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION:
-                    //peer list changed
-                    if (p2pManager != null) p2pManager.requestPeers(channel, new WifiDirectListener());
-                    break;
                 case WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION:
-                    //connection state changed
-                    if (p2pManager != null) p2pManager.requestConnectionInfo(channel, new WifiDirectListener());
+                    //connected
+                    WifiP2pInfo info = intent.getParcelableExtra(WifiP2pManager.EXTRA_WIFI_P2P_INFO);
+                    if (info == null) return;
+                    eventListener.OnConnectionStatusChanged(Status.CONNECTION_SUCCESSFUL.ordinal());
+                    CancelDiscovery();
+                    RemoveService();
+                    if (!info.groupFormed || thread != null) return;
+                    thread = info.isGroupOwner? new ServerThread() : new ClientThread(info.groupOwnerAddress.getHostAddress());
+                    thread.start();
                     break;
                 case WifiP2pManager.WIFI_P2P_DISCOVERY_CHANGED_ACTION:
-                    //discovery has changed
-                    eventListener.OnPeerStatusChanged(
+                    //discovery turned on/off
+                    eventListener.OnDiscoveryStatusChanged(
                         (intent.getIntExtra(WifiP2pManager.EXTRA_DISCOVERY_STATE, -1) == WifiP2pManager.WIFI_P2P_DISCOVERY_STARTED
-                        ? Status.STARTED_PEER_DISCOVERY
+                        ? Status.STARTED_DISCOVERY
                         : Status.STOPPED_DISCOVERY).ordinal()
                     );
                     break;
                 default:
                     eventListener.OnError(Status.ERROR_UNHANDLED_ACTION.ordinal());
                     break;
-            }
-        }
-    }
-
-    private class WifiDirectListener implements ChannelListener, ConnectionInfoListener, PeerListListener {
-        @Override public void onChannelDisconnected() {eventListener.OnDisconnected(Status.DISCONNECTED.ordinal());}
-        @Override public void onConnectionInfoAvailable(WifiP2pInfo wifiP2pInfo) {
-            eventListener.OnConnectionStatusChanged(Status.CONNECTION_SUCCESSFUL.ordinal());
-            if (!wifiP2pInfo.groupFormed || thread != null) return;
-            thread = wifiP2pInfo.isGroupOwner? new ServerThread() : new ClientThread(wifiP2pInfo.groupOwnerAddress.getHostAddress());
-            thread.start();
-        }
-        @Override public void onPeersAvailable(WifiP2pDeviceList peerList) {
-            List<WifiP2pDevice> refreshedPeers = (List<WifiP2pDevice>) peerList.getDeviceList();
-            synchronized (discoveredPeers) {
-                if (discoveredPeers.size() == 0) {
-                    eventListener.OnPeerStatusChanged(Status.NO_PEERS_FOUND.ordinal());
-                    return;
-                }
-                if (!refreshedPeers.equals(discoveredPeers)) {
-                    discoveredPeers.clear();
-                    discoveredPeers.addAll(refreshedPeers);
-                    eventListener.OnPeerStatusChanged(Status.PEER_LIST_CHANGED.ordinal());
-                }
             }
         }
     }
@@ -262,7 +267,7 @@ public final class WifiDirectManager {
             while (otherDeviceSocket.isConnected()) {//continuously read messages
                 bytesRead = iStream.read(buffer);
                 if (bytesRead == -1) {
-                    eventListener.OnDisconnected(Status.DISCONNECTED.ordinal());
+                    eventListener.OnConnectionStatusChanged(Status.DISCONNECTED.ordinal());
                     return;
                 }
                 if (isInterrupted()) return;
@@ -307,7 +312,7 @@ public final class WifiDirectManager {
                     catch (InterruptedException e) {CloseThread();}
                     if (gotKeepAlive) gotKeepAlive = false;
                     else {
-                        eventListener.OnDisconnected(Status.CONNECTION_LOST.ordinal());
+                        eventListener.OnConnectionStatusChanged(Status.CONNECTION_LOST.ordinal());
                         CloseThread();
                     }
                 }
@@ -325,7 +330,7 @@ public final class WifiDirectManager {
                 iStream = otherDeviceSocket.getInputStream();
                 oStream = otherDeviceSocket.getOutputStream();
                 keepAliveThread.start();
-                eventListener.OnConnectionStatusChanged(Status.SOCKET_CONNECTION_SUCCESSFUL.ordinal());
+                eventListener.OnConnectionStatusChanged(Status.CONNECTION_SUCCESSFUL.ordinal());
             } catch (IOException e) {
                 eventListener.OnError(Status.ERROR_CREATING_SERVER_SOCKET.ordinal());
                 try {serverSocket.close();} catch (IOException ignored) {/*Already closed*/}
@@ -359,9 +364,9 @@ public final class WifiDirectManager {
                 iStream = otherDeviceSocket.getInputStream();
                 oStream = otherDeviceSocket.getOutputStream();
                 keepAliveThread.start();
-                eventListener.OnConnectionStatusChanged(Status.SOCKET_CONNECTION_SUCCESSFUL.ordinal());
+                eventListener.OnConnectionStatusChanged(Status.CONNECTION_SUCCESSFUL.ordinal());
             } catch (IOException e) {
-                eventListener.OnConnectionStatusChanged(Status.SOCKET_CONNECTION_FAILED.ordinal());
+                eventListener.OnConnectionStatusChanged(Status.ERROR_SOCKET_CONNECTION_FAILED.ordinal());
                 CleanResources();
             }
         }

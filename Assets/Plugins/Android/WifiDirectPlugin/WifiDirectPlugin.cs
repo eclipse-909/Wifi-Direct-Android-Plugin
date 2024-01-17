@@ -2,7 +2,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace WifiDirectPlugin {
+namespace Plugins.Android.WifiDirectPlugin {
     /// <summary>
     /// This class is the bridge between C# and Java via JNI calls.
     /// This class uses a singleton because it doesn't make sense to have multiple instances of a WifiDirect object.
@@ -15,10 +15,7 @@ namespace WifiDirectPlugin {
         public static WifiDirect ThisDevice => thisDevice ??= new();
 
         WifiDirect() {
-            if (unityActivity == null) {
-                unityActivity = new AndroidJavaClass("com.unity3d.player.UnityPlayer").GetStatic<AndroidJavaObject>("currentActivity");
-                unityActivity.Call("SetServiceName", Application.productName);
-            }
+            unityActivity ??= new AndroidJavaClass("com.unity3d.player.UnityPlayer").GetStatic<AndroidJavaObject>("currentActivity");
             wifiDirectManager = new AndroidJavaObject("com.eclipsegames.wifidirect.WifiDirectManager", unityActivity, new EventCallbackProxy(this));
         }
 
@@ -27,46 +24,60 @@ namespace WifiDirectPlugin {
         /*================================ SERVER ONLY METHODS ================================*/
         /// <summary>
         /// Server method.
-        /// Creates a Wifi-Direct group to host clients on.
+        /// Creates and hosts a server on this device for other to connect to with ConnectToServer(string, string).
+        /// Subscribe to DiscoveryStatusChanged to be notified if the server was created successfully.
         /// </summary>
-        public void CreateP2PGroup() {wifiDirectManager.Call("CreateGroup");}
+        public void CreateDiscoverableServer(string passphrase) {wifiDirectManager.Call("CreateDiscoverableServer", passphrase);}
+        /// <summary>
+        /// Server method.
+        /// Removes any existing services hosted on this device. This does not disconnect any connected clients. It just makes your device not discoverable.
+        /// Subscribe to DiscoveryStatusChanged to be notified if the server was removed successfully.
+        /// </summary>
+        public void RemoveService() {wifiDirectManager.Call("RemoveService");}
 
         /*================================ CLIENT ONLY METHODS ================================*/
         /// <summary>
         /// Client method.
-        /// Initiates the process to asynchronously discover nearby devices with Wifi-Direct.
-        /// Subscribe to the PeerStatusChanged event to listen for changes.
+        /// Asynchronous call to start discovering services hosted on other devices.
+        /// Subscribe to DiscoveryStatusChanged to be notified if the map of discovered devices has changed.
         /// </summary>
-        public void DiscoverPeers() {wifiDirectManager.Call("DiscoverPeers");}
+        public void DiscoverServices() {wifiDirectManager.Call("DiscoverServices");}
         /// <summary>
         /// Client method.
-        /// Stops an ongoing peer discovery.
-        /// Subscribe to the PeerStatusChanged event to listen for changes.
+        /// Cancels an ongoing service discovery search.
+        /// Subscribe to DiscoveryStatusChanged to be notified if discovery has stopped.
         /// </summary>
         public void CancelDiscovery() {wifiDirectManager.Call("CancelDiscovery");}
-        /// <summary>Gets the list of currently discovered peers. The list is only up-to-date while discovering.</summary>
-        public List<(string macAddress, string deviceName)> GetDiscoveredPeers() {
-            return AndroidJNIHelper.ConvertFromJNIArray<List<(string, string)>>(
-                wifiDirectManager.Call<AndroidJavaObject>("GetDiscoveredPeers").GetRawObject()
+        /// <summary>
+        /// Client method.
+        /// Returns the current map of discovered devices that are hosting a valid service.
+        /// (MAC address -> device name).
+        /// Subscribe to DiscoveryStatusChanged to be notified if the map of discovered devices has changed.
+        /// </summary>
+        public Dictionary<string, string> GetDiscoveredServices() {//<MAC address, device name>
+            return AndroidJNIHelper.ConvertFromJNIArray<Dictionary<string, string>>(
+                wifiDirectManager.Call<AndroidJavaObject>("GetDiscoveredServices").GetRawObject()
             );
         }
         /// <summary>
         /// Client method.
-        /// Attempts to connect to the device with the given MAC address.
-        /// Can only successfully connect if the device has been discovered.
-        /// Subscribe to the ConnectionAttempted event to listen for changes.
+        /// Attempts to connect to a device with the given MAC address and passphrase.
+        /// Subscribe to ConnectionStatusChanged to be notified if the connection attempt was successful.
         /// </summary>
-        public bool ConnectToPeer(string macAddress) {return wifiDirectManager.Call<bool>("ConnectToPeer", macAddress);}
+        public void ConnectToService(string macAddress, string passphrase) {wifiDirectManager.Call("ConnectToService", macAddress, passphrase);}
         /// <summary>
         /// Client method.
-        /// Cancels an ongoing connection attempt.
-        /// Subscribe to the ConnectionAttempted event to listen for changes.
+        /// Cancels an ongoing connection attempt. Does not disconnect from the server.
         /// </summary>
         public void CancelConnect() {wifiDirectManager.Call("CancelConnect");}
 
         /*================================ CLIENT OR SERVER METHOD ================================*/
-        /// <summary>Removes the Wifi-Direct group if exists, and disconnects the devices.</summary>
-        public void RemoveP2PGroup() {wifiDirectManager.Call("CreateGroup");}
+        /// <summary>
+        /// Disconnects and stops all Wifi-Direct processes.
+        /// If called by the server device, you must call RemoveService() first.
+        /// Subscribe to ConnectionStatusChanged to be notified if you successfully disconnected.
+        /// </summary>
+        public void Disconnect() {wifiDirectManager.Call("Disconnect");}
         /// <summary>
         /// Sends a message to the other device.
         /// This function will only work if you are connected to another device.
@@ -88,33 +99,29 @@ namespace WifiDirectPlugin {
         /// </summary>
         public event EventHandler<StatusChangedEventArgs> StatusChanged;
         /// <summary>
-        /// Invoked when a change has occured during peer discovery.
-        /// Status codes are ATTEMPTING_PEER_DISCOVERY, FAILED_TO_DISCOVER_PEERS, STARTED_PEER_DISCOVERY, PEER_LIST_CHANGED, NO_PEERS_FOUND, and STOPPED_DISCOVERY.
+        /// Invoked when a change has occured during service discovery.
+        /// Status codes are SERVICE_DISCOVERABLE, SERVICE_REMOVED, STARTED_DISCOVERY, SERVICE_LIST_CHANGED, and STOPPED_DISCOVERY.
         /// </summary>
-        public event EventHandler<StatusChangedEventArgs> PeerStatusChanged;
+        public event EventHandler<StatusChangedEventArgs> DiscoveryStatusChanged;
         /// <summary>
         /// Invoked when a change has occured to your connection with another device.
-        /// Status codes are ATTEMPTING_CONNECTION, CONNECTION_FAILED, CONNECTION_SUCCESSFUL, SOCKET_CONNECTION_SUCCESSFUL, and SOCKET_CONNECTION_FAILED.
+        /// Status codes are CONNECTION_SUCCESSFUL, DISCONNECTED, and CONNECTION_LOST.
         /// </summary>
         public event EventHandler<StatusChangedEventArgs> ConnectionStatusChanged;
         /// <summary>
-        /// Invoked when this device has disconnected from the other device.
-        /// Status codes are DISCONNECTED and CONNECTION_LOST.
-        /// </summary>
-        public event EventHandler<StatusChangedEventArgs> Disconnected;
-        /// <summary>
-        /// Invoked when an error has occured during the Java runtime.
+        /// Invoked when an error has been caught during the Java runtime.
         /// Excludes errors that arise from using SendMessage() incorrectly and any unhandled, unexpected errors.
-        /// Status codes are ERROR_UNHANDLED_ACTION, ERROR_SENDING_MESSAGE, ERROR_RECEIVING_MESSAGE, and ERROR_CREATING_SERVER_SOCKET.
+        /// Status codes are ERROR_CREATING_GROUP, ERROR_ADDING_SERVICE_REQUEST, ERROR_ADDING_SERVICE,
+        /// ERROR_DISCOVERING_SERVICES, ERROR_CONNECTING, ERROR_SOCKET_CONNECTION_FAILED, ERROR_UNHANDLED_ACTION,
+        /// ERROR_SENDING_MESSAGE, ERROR_RECEIVING_MESSAGE, and ERROR_CREATING_SERVER_SOCKET.
         /// </summary>
         public event EventHandler<StatusChangedEventArgs> Error;
 
         /*================================ Counterparts to JNI callback invocation functions ================================*/
         void OnMessageReceived(MessageReceivedEventArgs args) {MessageReceived?.Invoke(this, args);}
         void OnStatusChanged(StatusChangedEventArgs args) {StatusChanged?.Invoke(this, args);}
-        void OnPeerStatusChanged(StatusChangedEventArgs args) {PeerStatusChanged?.Invoke(this, args);}
+        void OnDiscoveryStatusChanged(StatusChangedEventArgs args) {DiscoveryStatusChanged?.Invoke(this, args);}
         void OnConnectionStatusChanged(StatusChangedEventArgs args) {ConnectionStatusChanged?.Invoke(this, args);}
-        void OnDisconnection(StatusChangedEventArgs args) {Disconnected?.Invoke(this, args);}
         void OnError(StatusChangedEventArgs args) {Error?.Invoke(this, args);}
         
         sealed class EventCallbackProxy : AndroidJavaProxy {
@@ -124,9 +131,8 @@ namespace WifiDirectPlugin {
 
             void OnMessageReceived(byte[] message) {manager.OnMessageReceived(new(message));}
             void OnStatusChanged(int status) {manager.OnStatusChanged(new(status));}
-            void OnPeerStatusChanged(int status) {manager.OnPeerStatusChanged(new(status));}
+            void OnDiscoveryStatusChanged(int status) {manager.OnDiscoveryStatusChanged(new(status));}
             void OnConnectionAttempted(int status) {manager.OnConnectionStatusChanged(new(status));}
-            void OnDisconnection(int status) {manager.OnDisconnection(new(status));}
             void OnError(int status) {manager.OnError(new(status));}
         }
     }
@@ -139,10 +145,11 @@ namespace WifiDirectPlugin {
     /// </summary>
     public enum WifiDirectStatus {
         WIFI_DIRECT_ENABLED, WIFI_DIRECT_DISABLED,//wifi direct toggled on/off
-        ATTEMPTING_PEER_DISCOVERY, FAILED_TO_DISCOVER_PEERS, STARTED_PEER_DISCOVERY, PEER_LIST_CHANGED, NO_PEERS_FOUND, STOPPED_DISCOVERY,//peer-discovery list changed
-        ATTEMPTING_CONNECTION, CONNECTION_FAILED, CONNECTION_SUCCESSFUL, SOCKET_CONNECTION_SUCCESSFUL, SOCKET_CONNECTION_FAILED,//connection status changed
-        DISCONNECTED, CONNECTION_LOST,//disconnection status changed
-        ERROR_CREATING_GROUP, ERROR_UNHANDLED_ACTION, ERROR_SENDING_MESSAGE, ERROR_RECEIVING_MESSAGE, ERROR_CREATING_SERVER_SOCKET//error status
+        SERVICE_DISCOVERABLE, SERVICE_REMOVED, STARTED_DISCOVERY, SERVICE_LIST_CHANGED, STOPPED_DISCOVERY,//service discovery
+        CONNECTION_SUCCESSFUL, DISCONNECTED, CONNECTION_LOST,//connection status
+        ERROR_CREATING_GROUP, ERROR_ADDING_SERVICE_REQUEST, ERROR_ADDING_SERVICE,//error status
+            ERROR_DISCOVERING_SERVICES, ERROR_CONNECTING, ERROR_SOCKET_CONNECTION_FAILED,
+            ERROR_UNHANDLED_ACTION, ERROR_SENDING_MESSAGE, ERROR_RECEIVING_MESSAGE, ERROR_CREATING_SERVER_SOCKET
     }
     /// <summary>Event args for MessageReceived event. Property: byte[] Message</summary>
     public sealed class MessageReceivedEventArgs : EventArgs {
