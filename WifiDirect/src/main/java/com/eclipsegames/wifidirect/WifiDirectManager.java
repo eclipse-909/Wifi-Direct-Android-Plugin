@@ -38,7 +38,6 @@ public final class WifiDirectManager {
     private WifiDirectThread thread;
     private WifiP2pDnsSdServiceInfo serviceInfo;
     private static final int PORT_NUM = 8888;
-    private static final int PermissionRequestCode = 123;
 
     /*============================================================================*/
     /*================================ PUBLIC API ================================*/
@@ -193,6 +192,7 @@ public final class WifiDirectManager {
     /**Receives and handles system broadcasts. Nested in WifiDirectManager*/
     private final class WifiDirectBroadcastReceiver extends BroadcastReceiver {
         @Override public void onReceive(Context context, Intent intent) {
+            if (intent == null) return;
             String action = intent.getAction();
             if (action == null) action = "";
             switch (action) {
@@ -208,10 +208,10 @@ public final class WifiDirectManager {
                     //connected
                     WifiP2pInfo info = intent.getParcelableExtra(WifiP2pManager.EXTRA_WIFI_P2P_INFO);
                     if (info == null) return;
-                    eventListener.OnConnectionStatusChanged(Status.CONNECTION_SUCCESSFUL.ordinal());
                     CancelDiscovery();
                     RemoveService();
                     if (!info.groupFormed || thread != null) return;
+                    eventListener.OnConnectionStatusChanged(Status.CONNECTION_SUCCESSFUL.ordinal());
                     thread = info.isGroupOwner? new ServerThread() : new ClientThread(info.groupOwnerAddress.getHostAddress());
                     thread.start();
                     break;
@@ -317,7 +317,9 @@ public final class WifiDirectManager {
     private final class ServerThread extends WifiDirectThread {
         private ServerSocket serverSocket;
 
-        private ServerThread() {
+        private ServerThread() {super();}
+
+        @Override public void run() {
             try {
                 serverSocket = new ServerSocket(portNum);
                 otherDeviceSocket = serverSocket.accept();
@@ -331,9 +333,6 @@ public final class WifiDirectManager {
                 serverSocket = null;
                 CleanResources();
             }
-        }
-
-        @Override public void run() {
             if (serverSocket == null || otherDeviceSocket == null || iStream == null || oStream == null) return;
             try {ReadMessages();}
             catch (IOException e) {eventListener.OnError(Status.ERROR_RECEIVING_MESSAGE.ordinal(), -1);}
@@ -352,7 +351,14 @@ public final class WifiDirectManager {
     }
 
     private final class ClientThread extends WifiDirectThread {
-        private ClientThread (String ipAddress) {
+        private final String ipAddress;
+
+        private ClientThread (String ip) {
+            super();
+            ipAddress = ip;
+        }
+
+        @Override public void run() {
             try {
                 otherDeviceSocket = new Socket(ipAddress, portNum);
                 iStream = otherDeviceSocket.getInputStream();
@@ -363,9 +369,6 @@ public final class WifiDirectManager {
                 eventListener.OnConnectionStatusChanged(Status.ERROR_SOCKET_CONNECTION_FAILED.ordinal());
                 CleanResources();
             }
-        }
-
-        @Override public void run() {
             if (otherDeviceSocket == null || iStream == null || oStream == null) return;
             try {ReadMessages();}
             catch (IOException ignored) {eventListener.OnError(Status.ERROR_RECEIVING_MESSAGE.ordinal(), -1);}

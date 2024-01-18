@@ -16,15 +16,15 @@ public class WifiDirectManager : MonoBehaviour {
 				 selectedInstructions = "Please enter the passphrase for the network you've selected.";
 
 	public void OnWifiMultiplayerClicked() {
-		if (initialized) return;
 		wifiMultiplayerPanel.gameObject.SetActive(true);
+		instructions.text = defaultInstructions;
+		if (initialized) return;
+		initialized = true;
 		WifiDirect.ThisDevice.MessageReceived += HandleMessage;
 		WifiDirect.ThisDevice.StatusChanged += WifiDirectStatusChanged;
 		WifiDirect.ThisDevice.DiscoveryStatusChanged += PeerStatusChanged;
 		WifiDirect.ThisDevice.ConnectionStatusChanged += ConnectionStatusChanged;
 		WifiDirect.ThisDevice.Error += ErrorOccured;
-		instructions.text = defaultInstructions;
-		initialized = true;
 		if (WifiDirect.permissionCallbacks != null) return;
 		WifiDirect.permissionCallbacks = new();
 		WifiDirect.permissionCallbacks.PermissionGranted += permission => {
@@ -105,7 +105,7 @@ public class WifiDirectManager : MonoBehaviour {
 	}
 
 	void PeerStatusChanged(object sender, StatusChangedEventArgs args) {
-		Debug.Log("Peer status changed: " + Enum.GetName(typeof(WifiDirectStatus), args.Status));
+		Debug.Log("Discovery status changed: " + Enum.GetName(typeof(WifiDirectStatus), args.Status));
 		switch ((WifiDirectStatus)args.Status) {
 			case WifiDirectStatus.SERVICE_DISCOVERABLE: break;
 			case WifiDirectStatus.SERVICE_REMOVED: break;
