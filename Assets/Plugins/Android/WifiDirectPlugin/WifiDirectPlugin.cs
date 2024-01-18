@@ -1,8 +1,9 @@
 ﻿using UnityEngine;
 using System;
 using System.Collections.Generic;
+using UnityEngine.Android;
 
-namespace Plugins.Android.WifiDirectPlugin {
+namespace WifiDirectPlugin {
     /// <summary>
     /// This class is the bridge between C# and Java via JNI calls.
     /// This class uses a singleton because it doesn't make sense to have multiple instances of a WifiDirect object.
@@ -10,13 +11,16 @@ namespace Plugins.Android.WifiDirectPlugin {
     public sealed class WifiDirect {
         readonly AndroidJavaObject wifiDirectManager;
         static AndroidJavaObject unityActivity;
-        static WifiDirect thisDevice = null;
+        static WifiDirect thisDevice;
+        public static PermissionCallbacks permissionCallbacks;
         /// <summary>Automatically instantiates if null. Use this to call instance methods.</summary>
         public static WifiDirect ThisDevice => thisDevice ??= new();
 
         WifiDirect() {
             unityActivity ??= new AndroidJavaClass("com.unity3d.player.UnityPlayer").GetStatic<AndroidJavaObject>("currentActivity");
             wifiDirectManager = new AndroidJavaObject("com.eclipsegames.wifidirect.WifiDirectManager", unityActivity, new EventCallbackProxy(this));
+            string[] permissionsToRequest = { "android.permission.NEARBY_WIFI_DEVICES", "android.permission.ACCESS_FINE_LOCATION" };
+            Permission.RequestUserPermissions(permissionsToRequest, permissionCallbacks);
         }
 
         ~WifiDirect() {wifiDirectManager.Call("Close");}
@@ -27,7 +31,9 @@ namespace Plugins.Android.WifiDirectPlugin {
         /// Creates and hosts a server on this device for other to connect to with ConnectToServer(string, string).
         /// Subscribe to DiscoveryStatusChanged to be notified if the server was created successfully.
         /// </summary>
-        public void CreateDiscoverableServer(string passphrase) {wifiDirectManager.Call("CreateDiscoverableServer", passphrase);}
+        public void CreateDiscoverableServer(string passphrase) {
+            wifiDirectManager.Call("CreateDiscoverableServer", passphrase);
+        }
         /// <summary>
         /// Server method.
         /// Removes any existing services hosted on this device. This does not disconnect any connected clients. It just makes your device not discoverable.
@@ -115,14 +121,14 @@ namespace Plugins.Android.WifiDirectPlugin {
         /// ERROR_DISCOVERING_SERVICES, ERROR_CONNECTING, ERROR_SOCKET_CONNECTION_FAILED, ERROR_UNHANDLED_ACTION,
         /// ERROR_SENDING_MESSAGE, ERROR_RECEIVING_MESSAGE, and ERROR_CREATING_SERVER_SOCKET.
         /// </summary>
-        public event EventHandler<StatusChangedEventArgs> Error;
+        public event EventHandler<ErrorEventArgs> Error;
 
         /*================================ Counterparts to JNI callback invocation functions ================================*/
         void OnMessageReceived(MessageReceivedEventArgs args) {MessageReceived?.Invoke(this, args);}
         void OnStatusChanged(StatusChangedEventArgs args) {StatusChanged?.Invoke(this, args);}
         void OnDiscoveryStatusChanged(StatusChangedEventArgs args) {DiscoveryStatusChanged?.Invoke(this, args);}
         void OnConnectionStatusChanged(StatusChangedEventArgs args) {ConnectionStatusChanged?.Invoke(this, args);}
-        void OnError(StatusChangedEventArgs args) {Error?.Invoke(this, args);}
+        void OnError(ErrorEventArgs args) {Error?.Invoke(this, args);}
         
         sealed class EventCallbackProxy : AndroidJavaProxy {
             readonly WifiDirect manager;
@@ -132,8 +138,8 @@ namespace Plugins.Android.WifiDirectPlugin {
             void OnMessageReceived(byte[] message) {manager.OnMessageReceived(new(message));}
             void OnStatusChanged(int status) {manager.OnStatusChanged(new(status));}
             void OnDiscoveryStatusChanged(int status) {manager.OnDiscoveryStatusChanged(new(status));}
-            void OnConnectionAttempted(int status) {manager.OnConnectionStatusChanged(new(status));}
-            void OnError(int status) {manager.OnError(new(status));}
+            void OnConnectionStatusChanged(int status) {manager.OnConnectionStatusChanged(new(status));}
+            void OnError(int status, int reason) {manager.OnError(new(status, reason));}
         }
     }
 
@@ -151,6 +157,15 @@ namespace Plugins.Android.WifiDirectPlugin {
             ERROR_DISCOVERING_SERVICES, ERROR_CONNECTING, ERROR_SOCKET_CONNECTION_FAILED,
             ERROR_UNHANDLED_ACTION, ERROR_SENDING_MESSAGE, ERROR_RECEIVING_MESSAGE, ERROR_CREATING_SERVER_SOCKET
     }
+    /// <summary>
+    /// 
+    /// </summary>
+    public enum ErrorReason {
+        ERROR,
+        P2P_UNSUPPORTED,
+        BUSY,
+        NOT_AVAILABLE = -1
+    }
     /// <summary>Event args for MessageReceived event. Property: byte[] Message</summary>
     public sealed class MessageReceivedEventArgs : EventArgs {
         public byte[] Message {get; set;}
@@ -160,5 +175,13 @@ namespace Plugins.Android.WifiDirectPlugin {
     public sealed class StatusChangedEventArgs : EventArgs {
         public int Status {get; set;}
         public StatusChangedEventArgs(int s) {Status = s;}
+    }
+    /// <summary>
+    /// 
+    /// </summary>
+    public sealed class ErrorEventArgs : EventArgs {
+        public int Status {get; set;}
+        public int Reason {get; set;}
+        public ErrorEventArgs(int s, int r) {Status = s; Reason = r;}
     }
 }

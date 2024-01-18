@@ -3,9 +3,10 @@ using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
 using UnityEngine.UI;
-using Plugins.Android.WifiDirectPlugin;
+using WifiDirectPlugin;
 
 public class WifiDirectManager : MonoBehaviour {
+	bool initialized = false;
 	public RectTransform wifiMultiplayerPanel;
 	public Button hostButton, joinButton;
 	public Text instructions;
@@ -15,6 +16,7 @@ public class WifiDirectManager : MonoBehaviour {
 				 selectedInstructions = "Please enter the passphrase for the network you've selected.";
 
 	public void OnWifiMultiplayerClicked() {
+		if (initialized) return;
 		wifiMultiplayerPanel.gameObject.SetActive(true);
 		WifiDirect.ThisDevice.MessageReceived += HandleMessage;
 		WifiDirect.ThisDevice.StatusChanged += WifiDirectStatusChanged;
@@ -22,6 +24,18 @@ public class WifiDirectManager : MonoBehaviour {
 		WifiDirect.ThisDevice.ConnectionStatusChanged += ConnectionStatusChanged;
 		WifiDirect.ThisDevice.Error += ErrorOccured;
 		instructions.text = defaultInstructions;
+		initialized = true;
+		if (WifiDirect.permissionCallbacks != null) return;
+		WifiDirect.permissionCallbacks = new();
+		WifiDirect.permissionCallbacks.PermissionGranted += permission => {
+			Debug.Log("Permission granted: " + permission);
+		};
+		WifiDirect.permissionCallbacks.PermissionDenied += permission => {
+			Debug.Log("Permission denied: " + permission);
+		};
+		WifiDirect.permissionCallbacks.PermissionDeniedAndDontAskAgain += permission => {
+			Debug.Log("Permission denied & don't ask again: " + permission);
+		};
 	}
 
 	public void OnHostClicked() {
@@ -112,8 +126,8 @@ public class WifiDirectManager : MonoBehaviour {
 		}
 	}
 
-	void ErrorOccured(object sender, StatusChangedEventArgs args) {
-		Debug.Log("Error: " + Enum.GetName(typeof(WifiDirectStatus), args.Status));
+	void ErrorOccured(object sender, ErrorEventArgs args) {
+		Debug.Log("Error: " + Enum.GetName(typeof(WifiDirectStatus), args.Status) + "\nReason: " + Enum.GetName(typeof(ErrorReason), args.Reason));
 		switch ((WifiDirectStatus)args.Status) {
 			case WifiDirectStatus.ERROR_CREATING_GROUP: break;
 			case WifiDirectStatus.ERROR_ADDING_SERVICE_REQUEST: break;

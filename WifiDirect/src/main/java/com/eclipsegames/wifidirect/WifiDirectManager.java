@@ -38,6 +38,7 @@ public final class WifiDirectManager {
     private WifiDirectThread thread;
     private WifiP2pDnsSdServiceInfo serviceInfo;
     private static final int PORT_NUM = 8888;
+    private static final int PermissionRequestCode = 123;
 
     /*============================================================================*/
     /*================================ PUBLIC API ================================*/
@@ -88,17 +89,10 @@ public final class WifiDirectManager {
                 serviceInfo = WifiP2pDnsSdServiceInfo.newInstance("3-Pennies-Server", "_presence._tcp", record);
                 p2pManager.addLocalService(channel, serviceInfo, new WifiP2pManager.ActionListener() {
                     @Override public void onSuccess() {eventListener.OnDiscoveryStatusChanged(Status.SERVICE_DISCOVERABLE.ordinal());}
-                    @Override public void onFailure(int reason) {
-                        /*
-                        int ordinal = Status.ERROR_ADDING_SERVICE.ordinal();
-                        final int REASON_BIT_POSITION = 29;  // 2^29
-                        int combinedValue = (ordinal << REASON_BIT_POSITION) | (reason & 0x7);//0b0000_0111
-                        */
-                        eventListener.OnError(Status.ERROR_ADDING_SERVICE.ordinal());
-                    }
+                    @Override public void onFailure(int reason) {eventListener.OnError(Status.ERROR_ADDING_SERVICE.ordinal(), reason);}
                 });
             }
-            @Override public void onFailure(int i) {eventListener.OnError(Status.ERROR_CREATING_GROUP.ordinal());}//TODO figure out why this errored
+            @Override public void onFailure(int i) {eventListener.OnError(Status.ERROR_CREATING_GROUP.ordinal(), i);}//TODO figure out why this errored
         });
     }
 
@@ -123,10 +117,10 @@ public final class WifiDirectManager {
             @Override public void onSuccess() {
                 p2pManager.discoverServices(channel, new ActionListener() {
                     @Override public void onSuccess() {}//handled in setDnsSdResponseListeners
-                    @Override public void onFailure(int i) {eventListener.OnError(Status.ERROR_DISCOVERING_SERVICES.ordinal());}//TODO figure out why this errored
+                    @Override public void onFailure(int i) {eventListener.OnError(Status.ERROR_DISCOVERING_SERVICES.ordinal(), i);}//TODO figure out why this errored
                 });
             }
-            @Override public void onFailure(int i) {eventListener.OnError(Status.ERROR_ADDING_SERVICE_REQUEST.ordinal());}
+            @Override public void onFailure(int i) {eventListener.OnError(Status.ERROR_ADDING_SERVICE_REQUEST.ordinal(), i);}
         });
         p2pManager.setDnsSdResponseListeners(channel,
             (instanceName, registrationType, srcDevice) -> {
@@ -154,7 +148,7 @@ public final class WifiDirectManager {
         config.wps.setup = WpsInfo.PBC;
         p2pManager.connect(channel, config, new ActionListener() {
             @Override public void onSuccess() {}//handled in broadcast receiver
-            @Override public void onFailure(int reason) {eventListener.OnError(Status.ERROR_CONNECTING.ordinal());}
+            @Override public void onFailure(int reason) {eventListener.OnError(Status.ERROR_CONNECTING.ordinal(), reason);}
         });
     }
 
@@ -180,7 +174,7 @@ public final class WifiDirectManager {
         void OnStatusChanged(int status);
         void OnDiscoveryStatusChanged(int status);
         void OnConnectionStatusChanged(int status);
-        void OnError(int status);
+        void OnError(int status, int reason);
     }
 
     private enum Status {
@@ -230,7 +224,7 @@ public final class WifiDirectManager {
                     );
                     break;
                 default:
-                    eventListener.OnError(Status.ERROR_UNHANDLED_ACTION.ordinal());
+                    eventListener.OnError(Status.ERROR_UNHANDLED_ACTION.ordinal(), -1);
                     break;
             }
         }
@@ -260,7 +254,7 @@ public final class WifiDirectManager {
                         oStream.write(new byte[] {0});
                         executorService.wait(5000);
                     } catch (IOException | InterruptedException ignored) {
-                        eventListener.OnError(Status.ERROR_SENDING_MESSAGE.ordinal());
+                        eventListener.OnError(Status.ERROR_SENDING_MESSAGE.ordinal(), -1);
                     }
                 }
             });
@@ -281,7 +275,7 @@ public final class WifiDirectManager {
         private void SendMessage(byte[] message) {
             executorService.execute(() -> {
                 try {oStream.write(message);}
-                catch (IOException e) {eventListener.OnError(Status.ERROR_SENDING_MESSAGE.ordinal());}
+                catch (IOException e) {eventListener.OnError(Status.ERROR_SENDING_MESSAGE.ordinal(), -1);}
             });
         }
 
@@ -332,7 +326,7 @@ public final class WifiDirectManager {
                 keepAliveThread.start();
                 eventListener.OnConnectionStatusChanged(Status.CONNECTION_SUCCESSFUL.ordinal());
             } catch (IOException e) {
-                eventListener.OnError(Status.ERROR_CREATING_SERVER_SOCKET.ordinal());
+                eventListener.OnError(Status.ERROR_CREATING_SERVER_SOCKET.ordinal(), -1);
                 try {serverSocket.close();} catch (IOException ignored) {/*Already closed*/}
                 serverSocket = null;
                 CleanResources();
@@ -342,7 +336,7 @@ public final class WifiDirectManager {
         @Override public void run() {
             if (serverSocket == null || otherDeviceSocket == null || iStream == null || oStream == null) return;
             try {ReadMessages();}
-            catch (IOException e) {eventListener.OnError(Status.ERROR_RECEIVING_MESSAGE.ordinal());}
+            catch (IOException e) {eventListener.OnError(Status.ERROR_RECEIVING_MESSAGE.ordinal(), -1);}
             finally {
                 try {serverSocket.close();} catch (IOException ignored) {/*Already closed*/}
                 serverSocket = null;
@@ -374,7 +368,7 @@ public final class WifiDirectManager {
         @Override public void run() {
             if (otherDeviceSocket == null || iStream == null || oStream == null) return;
             try {ReadMessages();}
-            catch (IOException ignored) {eventListener.OnError(Status.ERROR_RECEIVING_MESSAGE.ordinal());}
+            catch (IOException ignored) {eventListener.OnError(Status.ERROR_RECEIVING_MESSAGE.ordinal(), -1);}
             finally {CleanResources();}
         }
     }
